@@ -41,7 +41,7 @@ quote, although the empty lines are later discarded from the
 AST.
 
 An EZDoc file is expected to end with an empty line. EZDoc files
-use the `.ezd` extension.
+use the `.ezdoc` extension.
 
 :: Block elements
 
@@ -214,6 +214,19 @@ Inline elements are syntax elements found directly inside text.
 Text AST can take two forms: either it is simply a binary,
 which means it doesn't contain inline elements; or it is a
 list of binaries, code inline or link elements.
+
+: Emphasis
+
+You can put *emphasis* on text by wrapping it with asterisk
+characters. There is only one kind of emphasis.
+
+``` ezdoc
+Listen carefully because I am telling you something *very*
+important. You *better* remember.
+```
+
+The AST for this element is `{e, EnclosedText}` where
+`EnclosedText` is a binary.
 
 : Code inline
 

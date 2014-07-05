@@ -157,6 +157,13 @@ inline(<<>>, Acc, <<>>) ->
 	lists:reverse(Acc);
 inline(<<>>, Acc, BinAcc) ->
 	lists:reverse([BinAcc|Acc]);
+inline(<< $*, Rest/bits >>, Acc, BinAcc) ->
+	case binary:match(Rest, << $* >>) of
+		nomatch ->
+			inline(Rest, Acc, << BinAcc/binary, $* >>);
+		_ ->
+			emphasis(Rest, [BinAcc|Acc], <<>>)
+	end;
 inline(<< $`, Rest/bits >>, Acc, BinAcc) ->
 	code_inline(Rest, [BinAcc|Acc], <<>>);
 inline(<< $^, $!, Rest/bits >>, Acc, BinAcc) ->
@@ -167,6 +174,11 @@ inline(<< $^, Rest/bits >>, Acc, BinAcc) ->
 	link1(Rest, [BinAcc|Acc], undefined, l, <<>>);
 inline(<< C, Rest/bits >>, Acc, BinAcc) ->
 	inline(Rest, Acc, << BinAcc/binary, C >>).
+
+emphasis(<< $*, Rest/bits >>, Acc, BinAcc) ->
+	inline(Rest, [{e, BinAcc}|Acc], <<>>);
+emphasis(<< C, Rest/bits >>, Acc, BinAcc) ->
+	emphasis(Rest, Acc, << BinAcc/binary, C >>).
 
 code_inline(<< $`, Rest/bits >>, Acc, BinAcc) ->
 	inline(Rest, [{ci, BinAcc}|Acc], <<>>);

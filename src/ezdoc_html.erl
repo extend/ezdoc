@@ -56,6 +56,8 @@ list([{i, Item}|Tail]) ->
 
 inline(Text) when is_binary(Text) ->
 	Text;
+inline({e, Text}) ->
+	["<em>", Text, "</em>"];
 inline({ci, Text}) ->
 	["<code>", Text, "</code>"];
 inline({img, URL}) ->

@@ -68,6 +68,8 @@ list([{u, Items}|Tail], Indent, Acc) ->
 
 inline(Text) when is_binary(Text) ->
 	Text;
+inline({e, Text}) ->
+	["*", Text, "*"];
 inline({ci, Text}) ->
 	["`", Text, "`"];
 inline({img, URL}) ->
