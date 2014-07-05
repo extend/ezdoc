@@ -1,0 +1,228 @@
+#!/usr/bin/escript
+%%!
+%%----------------------------------------------------------------------------
+
+-define(EZ_DOC_EXT_RE, "\\.ezdoc$").
+
+-record(options, {
+	format = auto,     % auto | html | man | {man,1..8} | markdown | s5
+	input,             % Path :: string() | stdin
+	output,            % Path :: string() | stdout
+	recursive = false
+}).
+
+%%----------------------------------------------------------------------------
+
+main(["-h"]) -> main(["--help"]);
+main(["--help"]) ->
+	io:fwrite("Usage:~n"),
+	io:fwrite("  ~s --format=FORMAT input.ezdoc [output | -]~n",
+	          [escript:script_name()]),
+	io:fwrite("  ~s --recursive --format=FORMAT input_dir output_dir~n",
+	          [escript:script_name()]),
+	io:fwrite("~nRecognized formats:~n"),
+	io:fwrite("  html (HTML snippet)~n"),
+	io:fwrite("  man, man1, man2, ..., man8~n"),
+	io:fwrite("  markdown~n"),
+	io:fwrite("  s5 (XHTML-based slide show)~n"),
+	io:fwrite("The format is guessed from output file name.~n"),
+	ok;
+
+main(Args) ->
+	case parse_args(Args) of
+		{ok, Opts} ->
+			case work(Opts) of
+				ok -> ok;
+				error -> halt(1)
+			end;
+		{error, Reason} ->
+			io:fwrite(standard_error, "Arguments error: ~p~n", [Reason]),
+			halt(2)
+	end.
+
+work(_Opts = #options{recursive = false, input = InFile, output = OutFile,
+                      format = Format}) ->
+	case convert_file(InFile, OutFile, Format) of
+		ok -> ok;
+		{error, Reason} ->
+			io:fwrite(standard_error, "Conversion error: ~p~n", [Reason]),
+			error
+	end;
+
+work(_Opts = #options{recursive = true, input = InDir, output = OutDir,
+                      format = Format}) ->
+	InDirLen = string:len(InDir) + 1, % including slash
+
+	% escript doesn't like `fun foo/X' for functions defined in script, so this
+	% must go here
+	ConvertFunc = fun(InFile, Errors) ->
+		RelativeName = string:substr(InFile, InDirLen + 1), % from next position
+		OutFile = filename:join(OutDir, RelativeName),
+		case convert_file(InFile, OutFile, Format) of
+			ok ->
+				Errors;
+			{error, Reason} ->
+				io:fwrite(standard_error, "file ~s: ~p~n", [RelativeName, Reason]),
+				error
+		end
+	end,
+
+	filelib:fold_files(InDir, ?EZ_DOC_EXT_RE, true, ConvertFunc, ok).
+
+%%----------------------------------------------------------------------------
+
+convert_file(InFile, OutFile, Format) ->
+	case filelib:ensure_dir(OutFile) of
+		ok ->
+			case parse_file(InFile) of
+				{ok, AST} ->
+					export_file(OutFile, AST, Format);
+				{error, Reason} ->
+					{error, Reason}
+			end;
+		{error, Reason} ->
+			{error, {mkdir, Reason}}
+	end.
+
+%%----------------------------------------------------------------------------
+
+export_file(stdout, AST, Format) ->
+	Content = export(AST, Format),
+	file:write(standard_io, Content); % ok | {error, Reason}
+
+export_file(File, AST, Format) ->
+	Content = export(AST, Format),
+	file:write_file(File, Content). % ok | {error, Reason}
+
+export(AST, html) ->
+	ezdoc_html:export(AST);
+
+export(AST, man) ->
+	export(AST, {man, 7}); % needs some default
+
+export(AST, {man, Section}) ->
+	ezdoc_man:export(Section, AST);
+
+export(AST, markdown) ->
+	ezdoc_markdown:export(AST);
+
+export(AST, s5) ->
+	ezdoc_s5:export(AST).
+
+%%----------------------------------------------------------------------------
+
+parse_file(stdin) ->
+	Content = slurp(),
+	parse(iolist_to_binary(Content));
+
+parse_file(File) ->
+	case file:read_file(File) of
+		{ok, Content} -> parse(Content);
+		{error, Reason} -> {error, Reason}
+	end.
+
+slurp() ->
+	case file:read_line(standard_io) of
+		{ok, Line} -> [Line | slurp()];
+		eof -> []
+			% die on errors (what kind of error for STDIN, anyway?)
+	end.
+
+parse(Content) ->
+	try
+		AST = ezdoc:parse(Content),
+		{ok, AST}
+	catch
+		error:undef -> {error, no_such_function};
+		error:_ -> {error, badsyntax}
+	end.
+
+%%----------------------------------------------------------------------------
+
+parse_args(Args) ->
+	parse_args(Args, #options{}).
+
+%% default values for input and output
+parse_args([], Opts = #options{input = undefined}) ->
+	parse_args([], Opts#options{input = stdin});
+parse_args([], Opts = #options{output = undefined}) ->
+	parse_args([], Opts#options{output = stdout});
+
+%% guess format if not specified
+parse_args([], Opts = #options{output = File, format = auto}) ->
+	case guess_format(File) of
+		unknown -> {error, format_not_specified};
+		Format -> parse_args([], Opts#options{format = Format})
+	end;
+
+%% input or output are not directories, but recursive operation requested
+parse_args([], _Opts = #options{input = stdin, recursive = true}) ->
+	{error, recursive_input_not_dir};
+parse_args([], _Opts = #options{output = stdout, recursive = true}) ->
+	{error, recursive_output_not_dir};
+
+parse_args([], Opts) ->
+	{ok, Opts};
+
+%% --recursive
+parse_args(["--recursive" | Rest], Opts) ->
+	parse_args(Rest, Opts#options{recursive = true});
+
+%% --format
+parse_args(["--format=" ++ Format | Rest], Opts) ->
+	parse_args(["--format", Format | Rest], Opts);
+parse_args(["--format", "html" | Rest], Opts) ->
+	parse_args(Rest, Opts#options{format = html});
+parse_args(["--format", "man" | Rest], Opts) ->
+	parse_args(Rest, Opts#options{format = man});
+parse_args(["--format", "markdown" | Rest], Opts) ->
+	parse_args(Rest, Opts#options{format = markdown});
+parse_args(["--format", "s5" | Rest], Opts) ->
+	parse_args(Rest, Opts#options{format = s5});
+parse_args(["--format", Format | _Rest], _Opts) ->
+	{error, {unknown_format, Format}};
+
+%% --foo, generally an unknown option
+parse_args(["--" ++ _ = Option | _Rest], _Opts) ->
+	{error, {unknown_option, Option}};
+
+%% input file
+parse_args(["-" | Rest], Opts = #options{input = undefined}) ->
+	parse_args(Rest, Opts#options{input = stdin});
+parse_args([Path | Rest], Opts = #options{input = undefined}) ->
+	parse_args(Rest, Opts#options{input = Path});
+
+%% output file
+parse_args(["-" | Rest], Opts = #options{output = undefined}) ->
+	parse_args(Rest, Opts#options{output = stdout});
+parse_args([Path | Rest], Opts = #options{output = undefined}) ->
+	parse_args(Rest, Opts#options{output = Path});
+
+%% anything else
+parse_args([Arg | _Rest], _Opts) ->
+	{error, {excessive_argument, Arg}}.
+
+%%----------------------------------------------------------------------------
+
+guess_format(stdout) ->
+	unknown;
+
+guess_format(Filename) ->
+	case string:to_lower(filename:extension(Filename)) of
+		".html" -> html;
+		".htm" -> html;
+		".1" -> {man, 1};
+		".2" -> {man, 2};
+		".3" -> {man, 3};
+		".4" -> {man, 4};
+		".5" -> {man, 5};
+		".6" -> {man, 6};
+		".7" -> {man, 7};
+		".8" -> {man, 8};
+		".md" -> markdown;
+		".markdown" -> markdown;
+		_ -> unknown
+	end.
+
+%%----------------------------------------------------------------------------
+%% vim:ft=erlang
